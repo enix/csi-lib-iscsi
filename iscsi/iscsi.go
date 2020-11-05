@@ -41,6 +41,15 @@ type TargetInfo struct {
 	Port   string `json:"port"`
 }
 
+type scsiInfo struct {
+	BlockDevices []ScsiDevice
+}
+
+type ScsiDevice struct {
+	Name string `json:"name"`
+	Hctl string `json:"hctl"`
+}
+
 //Connector provides a struct to hold all of the needed parameters to make our iscsi connection
 type Connector struct {
 	VolumeName       string       `json:"volume_name"`
@@ -364,7 +373,7 @@ func DisconnectVolume(c Connector) error {
 	// 2. Flush the multipath map for the disk we’re removing (if multipath is enabled).
 	// 3. Remove the physical disk entities that Linux maintains.
 	// 4. Take the storage volume (disk) offline on the storage subsystem.
-	// 5. Rescan the iSCSI sessions.
+	// 5. Rescan the iSCSI sessions (after unmapping only).
 	//
 	// DisconnectVolume focuses on step 2 and 3.
 	// Note: make sure the volume is already unmounted before calling this method.
@@ -372,7 +381,7 @@ func DisconnectVolume(c Connector) error {
 	debug.Printf("Disconnecting volume in path %s.\n", c.DevicePath)
 	if c.Multipath {
 		debug.Printf("Removing multipath device.\n")
-		devices, err := GetSysDevicesFromMultipathDevice(c.DevicePath)
+		devices, err := GetScsiDevicesFromMultipathDevice(c.DevicePath)
 		if err != nil {
 			return err
 		}
@@ -381,12 +390,21 @@ func DisconnectVolume(c Connector) error {
 			return err
 		}
 		debug.Printf("Found multipath slaves %v, removing all of them.\n", devices)
-		if err := RemovePhysicalDevice(devices...); err != nil {
+		scsiDevices, err := GetScsiDevices(devices...)
+		if err != nil {
+			return err
+		}
+
+		if err := RemoveScsiDevices(scsiDevices...); err != nil {
 			return err
 		}
 	} else {
 		debug.Printf("Removing normal device.\n")
-		if err := RemovePhysicalDevice(c.DevicePath); err != nil {
+		scsiDevice, err := GetScsiDevice(c.DevicePath)
+		if err != nil {
+			return err
+		}
+		if err = RemoveScsiDevices(*scsiDevice); err != nil {
 			return err
 		}
 	}
@@ -395,33 +413,84 @@ func DisconnectVolume(c Connector) error {
 	return nil
 }
 
-// RemovePhysicalDevice removes device(s) sdx from a Linux host.
-func RemovePhysicalDevice(devices ...string) error {
-	debug.Printf("Removing scsi device %v.\n", devices)
+func GetScsiDevice(device string) (*ScsiDevice, error) {
+	scsiDevices, err := GetScsiDevices(device)
+	if err != nil {
+		return nil, err
+	}
+	return &scsiDevices[0], nil
+}
+
+// GetScsiDevices get scsi devices from a device names
+func GetScsiDevices(devices ...string) ([]ScsiDevice, error) {
+	debug.Printf("Getting info about SCSI devices %s.\n", devices)
+	
+	var devicePaths []string
+	for _, device := range devices {
+		devicePaths = append(devicePaths, filepath.Join(devPath, device))
+	}
+
+	out, err := exec.Command("lsblk", append([]string{"-SJ"}, devicePaths...)...).Output()
+	if err != nil {
+		debug.Printf("An error occured while looking info about SCSI devices: %v\n", err)
+		return nil, err
+	}
+
+	var scsiInfo scsiInfo
+	json.Unmarshal(out, &scsiInfo)
+	return scsiInfo.BlockDevices, nil
+}
+
+func writeInScsiDeviceFile(hctl string, file string, content string) (bool, error) {
+	filename := filepath.Join(sysScsiPath, hctl, "device", file)
+	debug.Printf("Write %q in %q.\n", content, filename)
+	if f, err := os.OpenFile(filename, os.O_TRUNC|os.O_WRONLY, 0200); err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		} else {
+			debug.Printf("Error while opening file %v: %v\n", filename, err)
+			return false, err
+		}
+	} else {
+		defer f.Close()
+		if _, err := f.WriteString(content); err != nil {
+			debug.Printf("Error while writing to file %v: %v", filename, err)
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// RemovePhysicalDevice removes scsi device(s) from a Linux host.
+func RemoveScsiDevices(devices ...ScsiDevice) error {
+	debug.Printf("Removing scsi devices %v.\n", devices)
+
 	var errs []error
-	for _, deviceName := range devices {
-		if deviceName == "" {
+	for _, device := range devices {
+		fullDevice := filepath.Join(devPath, device.Name)
+		debug.Printf("Flush scsi device %v.\n", device.Name)
+		err := exec.Command("blockdev", "--flushbufs", fullDevice).Run()
+		if err != nil {
+			debug.Printf("Command 'blockdev --flushbufs %v' did not succeed to flush the device: %v\n", fullDevice, err)
+			return err
+		}
+
+		debug.Printf("Put scsi device %v offline.\n", device.Name)
+		skip, err := writeInScsiDeviceFile(device.Hctl, "state", "offline\n")
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		} else if skip {
 			continue
 		}
 
-		debug.Printf("Delete scsi device %v.\n", deviceName)
-		// Remove a scsi device by executing 'echo "1" > /sys/block/sdx/device/delete
-		filename := filepath.Join(sysBlockPath, deviceName, "device", "delete")
-		if f, err := os.OpenFile(filename, os.O_TRUNC|os.O_WRONLY, 0200); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			} else {
-				debug.Printf("Error while opening file %v: %v\n", filename, err)
-				errs = append(errs, err)
-				continue
-			}
-		} else {
-			defer f.Close()
-			if _, err := f.WriteString("1"); err != nil {
-				debug.Printf("Error while writing to file %v: %v", filename, err)
-				errs = append(errs, err)
-				continue
-			}
+		debug.Printf("Delete scsi device %v.\n", device.Name)
+		skip, err = writeInScsiDeviceFile(device.Hctl, "delete", "1") // Remove a scsi device by echo 1 > /sys/class/scsi_device/h:c:t:l/device/delete
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		} else if skip {
+			continue
 		}
 	}
 

@@ -91,7 +91,7 @@ func ShowInterface(iface string) (string, error) {
 func CreateDBEntry(tgtIQN, portal, iFace string, discoverySecrets, sessionSecrets Secrets) error {
 	debug.Println("Begin CreateDBEntry...")
 	baseArgs := []string{"-m", "node", "-T", tgtIQN, "-p", portal}
-	_, err := iscsiCmd(append(baseArgs, []string{"-I", iFace, "-o", "new"}...)...)
+	_, err := iscsiCmd(append(baseArgs, "-I", iFace, "-o", "new")...)
 	if err != nil {
 		return err
 	}
