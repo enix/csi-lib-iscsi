@@ -36,6 +36,7 @@ func (e *CmdError) Error() string {
 
 func iscsiCmd(args ...string) (string, error) {
 	cmd := execCommand("iscsiadm", args...)
+	debug.Printf("Run iscsiadm command: %s", strings.Join(append([]string{"iscsiadm"}, args...), " "))
 	var stdout bytes.Buffer
 	var iscsiadmError error
 	cmd.Stdout = &stdout
