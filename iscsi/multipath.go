@@ -68,7 +68,10 @@ func getMultipathMap(device string) (*multipathDeviceMap, error) {
 	}
 
 	var deviceMap multipathDeviceMap;
-	json.Unmarshal(out, &deviceMap) // TODO check error
+	err = json.Unmarshal(out, &deviceMap)
+	if err != nil {
+		return nil, err
+	}
 	return &deviceMap, nil
 }
 
@@ -85,21 +88,22 @@ func (deviceMap *multipathDeviceMap) GetSlaves() []string {
 }
 
 // FlushMultipathDevice flushes a multipath device dm-x with command multipath -f /dev/dm-x
-func FlushMultipathDevice(device string) error {
-	debug.Printf("Flushing multipath device '%v'.\n", device)
+func FlushMultipathDevice(device *Device) error {
+	devicePath := device.GetPath()
+	debug.Printf("Flushing multipath device '%v'.\n", devicePath)
 
 	timeout := 5 * time.Second
-	_, err := execWithTimeout("multipath", []string{"-f", device}, timeout)
+	_, err := execWithTimeout("multipath", []string{"-f", devicePath}, timeout)
 
 	if err != nil {
-		if _, e := os.Stat(device); os.IsNotExist(e) {
-			debug.Printf("Multipath device %v was deleted.\n", device)
+		if _, e := os.Stat(devicePath); os.IsNotExist(e) {
+			debug.Printf("Multipath device %v was deleted.\n", devicePath)
 		} else {
-			debug.Printf("Command 'multipath -f %v' did not succeed to delete the device: %v\n", device, err)
+			debug.Printf("Command 'multipath -f %v' did not succeed to delete the device: %v\n", devicePath, err)
 			return err
 		}
 	}
 
-	debug.Printf("Finshed flushing multipath device %v.\n", device)
+	debug.Printf("Finshed flushing multipath device %v.\n", devicePath)
 	return nil
 }

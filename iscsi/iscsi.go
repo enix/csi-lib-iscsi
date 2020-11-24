@@ -46,17 +46,10 @@ type deviceInfo struct {
 }
 
 type Device struct {
-	Name string `json:"name"`
+	Name     string   `json:"name"`
+	Hctl     string   `json:"hctl"`
 	Children []Device `json:"children"`
-}
-
-type scsiInfo struct {
-	BlockDevices []ScsiDevice
-}
-
-type ScsiDevice struct {
-	Name string `json:"name"`
-	Hctl string `json:"hctl"`
+	Type     string   `json:"type"`
 }
 
 //Connector provides a struct to hold all of the needed parameters to make our iscsi connection
@@ -69,8 +62,8 @@ type Connector struct {
 	SessionSecrets   Secrets      `json:"session_secrets"`
 	Interface        string       `json:"interface"`
 
-	MultipathDevicePath string       `json:"multipath_device_path"`
-	ScsiDevices         []ScsiDevice `json:"scsi_devices"`
+	MountTargetDevice *Device  `json:"mount_target_device"`
+	Devices           []Device `json:"devices"`
 
 	RetryCount      int32 `json:"retry_count"`
 	CheckInterval   int32 `json:"check_interval"`
@@ -199,34 +192,38 @@ func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int,
 	return false, err
 }
 
-func getMultipathDevice(devices []ScsiDevice) (string, error) {
+func getMultipathDevice(devices []Device) (*Device, error) {
 	var deviceInfo deviceInfo
-	var multipathDevice string
+	var multipathDevice *Device
 	var devicePaths []string
 
 	for _, device := range devices {
-		devicePaths = append(devicePaths, filepath.Join("/dev", device.Name)) // TODO Use hctl instead
+		devicePaths = append(devicePaths, device.GetPath())
 	}
 	out, err := lsblk("-J", devicePaths)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if err = json.Unmarshal(out, &deviceInfo); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	for _, device := range deviceInfo.BlockDevices {
 		if len(device.Children) != 1 {
-			return "", fmt.Errorf("Device is not mapped to exactly one multipath device: %v", device.Children)
+			return nil, fmt.Errorf("Device is not mapped to exactly one multipath device: %v", device.Children)
 		}
-		if multipathDevice != "" && device.Children[0].Name != multipathDevice {
-			return "", fmt.Errorf("Devices don't share a common multipath device: %v", devices)
+		if multipathDevice != nil && device.Children[0].Name != multipathDevice.Name {
+			return nil, fmt.Errorf("Devices don't share a common multipath device: %v", devices)
 		}
-		multipathDevice = device.Children[0].Name
+		multipathDevice = &device.Children[0]
 	}
 
-	return filepath.Join("/dev/mapper", multipathDevice), nil
+	if multipathDevice.Type != "mpath" {
+		return nil, fmt.Errorf("Device is not of mpath type: %v", multipathDevice)
+	}
+
+	return multipathDevice, nil
 }
 
 // Connect attempts to connect a volume to this node using the provided Connector info
@@ -323,27 +320,27 @@ func Connect(c *Connector) (string, error) {
 		}
 	}
 
-	c.ScsiDevices, err = GetScsiDevices(devicePaths)
+	c.Devices, err = GetScsiDevices(devicePaths)
 	if err != nil {
 		return "", err
 	}
 
-	if len(c.ScsiDevices) < 1 {
+	if len(c.Devices) < 1 {
 		iscsiCmd([]string{"-m", "iface", "-I", iFace, "-o", "delete"}...)
 		return "", fmt.Errorf("failed to find device path: %s, last error seen: %v", devicePaths, lastErr)
 	}
 
-	devicePath, isMultipath, err := GetMountTargetDevice(c)
+	mountTargetDevice, err := getMountTargetDevice(c)
+	c.MountTargetDevice = mountTargetDevice
 	if err != nil {
+		debug.Printf("Connect failed: %v", err)
+		RemoveScsiDevices(c.Devices...)
+		c.MountTargetDevice = nil
+		c.Devices = []Device{}
 		return "", err
 	}
 
-	c.MultipathDevicePath = ""
-	if isMultipath {
-		c.MultipathDevicePath = devicePath
-	}
-
-	return devicePath, nil
+	return c.MountTargetDevice.GetPath(), nil
 }
 
 //Disconnect performs a disconnect operation on a volume
@@ -368,24 +365,24 @@ func DisconnectVolume(c *Connector) error {
 	// DisconnectVolume focuses on step 2 and 3.
 	// Note: make sure the volume is already unmounted before calling this method.
 
-	if c.MultipathDevicePath != "" {
-		debug.Printf("Removing multipath device in path %s.\n", c.MultipathDevicePath)
-		err := FlushMultipathDevice(c.MultipathDevicePath)
+	if len(c.Devices) > 1 {
+		debug.Printf("Removing multipath device in path %s.\n", c.MountTargetDevice.GetPath())
+		err := FlushMultipathDevice(c.MountTargetDevice)
 		if err != nil {
 			return err
 		}
 
-		if err := RemoveScsiDevices(c.ScsiDevices...); err != nil {
+		if err := RemoveScsiDevices(c.Devices...); err != nil {
 			return err
 		}
 	} else {
-		devicePath := filepath.Join("/dev", c.ScsiDevices[0].Name)
+		devicePath := c.MountTargetDevice.GetPath()
 		debug.Printf("Removing normal device in path %s.\n", devicePath)
-		scsiDevice, err := GetScsiDevice(devicePath)
+		Device, err := GetScsiDevice(devicePath)
 		if err != nil {
 			return err
 		}
-		if err = RemoveScsiDevices(*scsiDevice); err != nil {
+		if err = RemoveScsiDevices(*Device); err != nil {
 			return err
 		}
 	}
@@ -394,21 +391,25 @@ func DisconnectVolume(c *Connector) error {
 	return nil
 }
 
-func GetMountTargetDevice(c *Connector) (string, bool, error) {
-	devicePath, err := getMultipathDevice(c.ScsiDevices)
-	if err == nil {
+func getMountTargetDevice(c *Connector) (*Device, error) {
+	if len(c.Devices) > 1 {
+		multipathDevice, err := getMultipathDevice(c.Devices)
+		if err != nil {
+			debug.Printf("mount target is not a multipath device: %v", err)
+			return nil, err
+		}
 		debug.Printf("mount target is a multipath device")
-		return devicePath, true, nil
-	}
-	debug.Printf("mount target is not a multipath device: %v", err)
-	if len(c.ScsiDevices) == 0 {
-		return "", false, fmt.Errorf("could not find mount target device: connector does not contain any device")
+		return multipathDevice, nil
 	}
 
-	return filepath.Join("/dev", c.ScsiDevices[0].Name), false, nil // TODO use hctl instead
+	if len(c.Devices) == 0 {
+		return nil, fmt.Errorf("could not find mount target device: connector does not contain any device")
+	}
+
+	return &c.Devices[0], nil
 }
 
-func GetScsiDevice(deviceName string) (*ScsiDevice, error) {
+func GetScsiDevice(deviceName string) (*Device, error) {
 	scsiDevices, err := GetScsiDevices([]string{deviceName})
 	if err != nil {
 		return nil, err
@@ -417,7 +418,7 @@ func GetScsiDevice(deviceName string) (*ScsiDevice, error) {
 }
 
 // GetScsiDevices get scsi devices from device names
-func GetScsiDevices(deviceNames []string) ([]ScsiDevice, error) {
+func GetScsiDevices(deviceNames []string) ([]Device, error) {
 	debug.Printf("Getting info about SCSI devices %s.\n", deviceNames)
 
 	out, err := lsblk("-JS", deviceNames)
@@ -426,13 +427,13 @@ func GetScsiDevices(deviceNames []string) ([]ScsiDevice, error) {
 		return nil, err
 	}
 
-	var scsiInfo scsiInfo
-	err = json.Unmarshal(out, &scsiInfo)
+	var deviceInfo deviceInfo
+	err = json.Unmarshal(out, &deviceInfo)
 	if err != nil {
 		return nil, err
 	}
 
-	return scsiInfo.BlockDevices, nil
+	return deviceInfo.BlockDevices, nil
 }
 
 func lsblk(flags string, deviceNames []string) ([]byte, error) {
@@ -466,13 +467,13 @@ func writeInScsiDeviceFile(hctl string, file string, content string) (bool, erro
 }
 
 // RemovePhysicalDevice removes scsi device(s) from a Linux host.
-func RemoveScsiDevices(devices ...ScsiDevice) error {
+func RemoveScsiDevices(devices ...Device) error {
 	debug.Printf("Removing scsi devices %v.\n", devices)
 
 	var errs []error
 	for _, device := range devices {
 		debug.Printf("Flush scsi device %v.\n", device.Name)
-		err := exec.Command("blockdev", "--flushbufs", filepath.Join("/dev", device.Name)).Run()
+		err := exec.Command("blockdev", "--flushbufs", device.GetPath()).Run()
 		if err != nil {
 			debug.Printf("Command 'blockdev --flushbufs %v' did not succeed to flush the device: %v\n", device.Name, err)
 			return err
@@ -517,7 +518,6 @@ func PersistConnector(c *Connector, filePath string) error {
 		return fmt.Errorf("error encoding connector: %v", err)
 	}
 	return nil
-
 }
 
 // GetConnectorFromFile attempts to create a Connector using the specified json file (ie /var/lib/pfile/myConnector.json)
@@ -534,5 +534,12 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 	}
 
 	return &data, nil
+}
 
+func (d *Device) GetPath() string {
+	if d.Type == "mpath" {
+		return filepath.Join("/dev/mapper", d.Name)
+	}
+
+	return filepath.Join("/dev", d.Name)
 }
