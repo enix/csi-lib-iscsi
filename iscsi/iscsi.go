@@ -322,9 +322,14 @@ func Connect(c *Connector) (string, error) {
 		}
 	}
 
-	c.Devices, err = GetScsiDevices(devicePaths)
-	if err != nil {
-		return "", err
+	// GetScsiDevices returns all devices if no paths are given
+	if len(devicePaths) < 1 {
+		c.Devices = []Device{}
+	} else {
+		c.Devices, err = GetScsiDevices(devicePaths)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	if len(c.Devices) < 1 {
@@ -420,11 +425,12 @@ func GetScsiDevice(deviceName string) (*Device, error) {
 	return &scsiDevices[0], nil
 }
 
-// GetScsiDevices get SCSI devices from device names
-func GetScsiDevices(deviceNames []string) ([]Device, error) {
-	debug.Printf("Getting info about SCSI devices %s.\n", deviceNames)
+// GetScsiDevices get SCSI devices from device paths
+// It will returns all devices if no paths are given
+func GetScsiDevices(devicePaths []string) ([]Device, error) {
+	debug.Printf("Getting info about SCSI devices %s.\n", devicePaths)
 
-	out, err := lsblk("-JS", deviceNames)
+	out, err := lsblk("-JS", devicePaths)
 	if err != nil {
 		debug.Printf("An error occured while looking info about SCSI devices: %v", err)
 		return nil, err
@@ -439,9 +445,9 @@ func GetScsiDevices(deviceNames []string) ([]Device, error) {
 	return deviceInfo.BlockDevices, nil
 }
 
-func lsblk(flags string, deviceNames []string) ([]byte, error) {
-	out, err := exec.Command("lsblk", append([]string{flags}, deviceNames...)...).Output()
-	debug.Printf("lsblk %s %s", flags, strings.Join(deviceNames, " "))
+func lsblk(flags string, devicePaths []string) ([]byte, error) {
+	out, err := exec.Command("lsblk", append([]string{flags}, devicePaths...)...).Output()
+	debug.Printf("lsblk %s %s", flags, strings.Join(devicePaths, " "))
 	if err != nil {
 		return nil, fmt.Errorf("lsblk: %v", err)
 	}
