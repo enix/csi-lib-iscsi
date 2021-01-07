@@ -35,6 +35,7 @@ type iscsiSession struct {
 	Name     string
 }
 
+// TargetInfo contains connection information to connect to an ISCSI endpoint
 type TargetInfo struct {
 	Iqn    string `json:"iqn"`
 	Portal string `json:"portal"`
@@ -45,6 +46,7 @@ type deviceInfo struct {
 	BlockDevices []Device
 }
 
+// Device contains informations about a device
 type Device struct {
 	Name     string   `json:"name"`
 	Hctl     string   `json:"hctl"`
@@ -409,6 +411,7 @@ func getMountTargetDevice(c *Connector) (*Device, error) {
 	return &c.Devices[0], nil
 }
 
+// GetScsiDevice get an SCSI device from a device name
 func GetScsiDevice(deviceName string) (*Device, error) {
 	scsiDevices, err := GetScsiDevices([]string{deviceName})
 	if err != nil {
@@ -417,7 +420,7 @@ func GetScsiDevice(deviceName string) (*Device, error) {
 	return &scsiDevices[0], nil
 }
 
-// GetScsiDevices get scsi devices from device names
+// GetScsiDevices get SCSI devices from device names
 func GetScsiDevices(deviceNames []string) ([]Device, error) {
 	debug.Printf("Getting info about SCSI devices %s.\n", deviceNames)
 
@@ -449,24 +452,26 @@ func lsblk(flags string, deviceNames []string) ([]byte, error) {
 func writeInScsiDeviceFile(hctl string, file string, content string) (bool, error) {
 	filename := filepath.Join("/sys/class/scsi_device", hctl, "device", file)
 	debug.Printf("Write %q in %q.\n", content, filename)
-	if f, err := os.OpenFile(filename, os.O_TRUNC|os.O_WRONLY, 0200); err != nil {
+
+	f, err := os.OpenFile(filename, os.O_TRUNC|os.O_WRONLY, 0200)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return true, nil
-		} else {
-			debug.Printf("Error while opening file %v: %v\n", filename, err)
-			return false, err
 		}
-	} else {
-		defer f.Close()
-		if _, err := f.WriteString(content); err != nil {
-			debug.Printf("Error while writing to file %v: %v", filename, err)
-			return false, err
-		}
+		debug.Printf("Error while opening file %v: %v\n", filename, err)
+		return false, err
 	}
+
+	defer f.Close()
+	if _, err := f.WriteString(content); err != nil {
+		debug.Printf("Error while writing to file %v: %v", filename, err)
+		return false, err
+	}
+
 	return false, nil
 }
 
-// RemovePhysicalDevice removes scsi device(s) from a Linux host.
+// RemoveScsiDevices removes scsi device(s) from a Linux host.
 func RemoveScsiDevices(devices ...Device) error {
 	debug.Printf("Removing scsi devices %v.\n", devices)
 
@@ -536,6 +541,7 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 	return &data, nil
 }
 
+// GetPath returns the path of a device
 func (d *Device) GetPath() string {
 	if d.Type == "mpath" {
 		return filepath.Join("/dev/mapper", d.Name)

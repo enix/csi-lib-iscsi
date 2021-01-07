@@ -2,10 +2,10 @@ package iscsi
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"time"
-	"encoding/json"
 )
 
 type multipathDeviceMap struct {
@@ -13,9 +13,9 @@ type multipathDeviceMap struct {
 }
 
 type multipathMap struct {
-	Name string `json:"name"`
-	Uuid string `json:"uuid"`
-	Sysfs string `json:"sysfs"`
+	Name       string      `json:"name"`
+	UUID       string      `json:"uuid"`
+	Sysfs      string      `json:"sysfs"`
 	PathGroups []pathGroup `json:"path_groups"`
 }
 
@@ -27,6 +27,7 @@ type path struct {
 	Device string `json:"dev"`
 }
 
+// ExecWithTimeout execute a command with a timeout and returns an error if timeout is excedeed
 func ExecWithTimeout(command string, args []string, timeout time.Duration) ([]byte, error) {
 	debug.Printf("Executing command '%v' with args: '%v'.\n", command, args)
 
@@ -67,7 +68,7 @@ func getMultipathMap(device string) (*multipathDeviceMap, error) {
 		return nil, err
 	}
 
-	var deviceMap multipathDeviceMap;
+	var deviceMap multipathDeviceMap
 	err = json.Unmarshal(out, &deviceMap)
 	if err != nil {
 		return nil, err
