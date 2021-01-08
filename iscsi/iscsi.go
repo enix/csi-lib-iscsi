@@ -48,10 +48,14 @@ type deviceInfo struct {
 
 // Device contains informations about a device
 type Device struct {
-	Name     string   `json:"name"`
-	Hctl     string   `json:"hctl"`
-	Children []Device `json:"children"`
-	Type     string   `json:"type"`
+	Name      string   `json:"name"`
+	Hctl      string   `json:"hctl"`
+	Children  []Device `json:"children"`
+	Type      string   `json:"type"`
+	Vendor    string   `json:"vendor"`
+	Model     string   `json:"model"`
+	Revision  string   `json:"rev"`
+	Transport string   `json:"tran"`
 }
 
 //Connector provides a struct to hold all of the needed parameters to make our iscsi connection
@@ -322,11 +326,11 @@ func Connect(c *Connector) (string, error) {
 		}
 	}
 
-	// GetScsiDevices returns all devices if no paths are given
+	// GetIscsiDevices returns all devices if no paths are given
 	if len(devicePaths) < 1 {
 		c.Devices = []Device{}
 	} else {
-		c.Devices, err = GetScsiDevices(devicePaths)
+		c.Devices, err = GetIscsiDevices(devicePaths)
 		if err != nil {
 			return "", err
 		}
@@ -385,11 +389,11 @@ func DisconnectVolume(c *Connector) error {
 	} else {
 		devicePath := c.MountTargetDevice.GetPath()
 		debug.Printf("Removing normal device in path %s.\n", devicePath)
-		Device, err := GetScsiDevice(devicePath)
+		device, err := GetIscsiDevice(devicePath)
 		if err != nil {
 			return err
 		}
-		if err = RemoveScsiDevices(*Device); err != nil {
+		if err = RemoveScsiDevices(*device); err != nil {
 			return err
 		}
 	}
@@ -416,17 +420,20 @@ func getMountTargetDevice(c *Connector) (*Device, error) {
 	return &c.Devices[0], nil
 }
 
-// GetScsiDevice get an SCSI device from a device name
-func GetScsiDevice(deviceName string) (*Device, error) {
-	scsiDevices, err := GetScsiDevices([]string{deviceName})
+// GetIscsiDevice get an SCSI device from a device name
+func GetIscsiDevice(deviceName string) (*Device, error) {
+	iscsiDevices, err := GetIscsiDevices([]string{deviceName})
 	if err != nil {
 		return nil, err
 	}
-	return &scsiDevices[0], nil
+	if len(iscsiDevices) == 0 {
+		return nil, fmt.Errorf("device %q not found", deviceName)
+	}
+	return &iscsiDevices[0], nil
 }
 
 // GetScsiDevices get SCSI devices from device paths
-// It will returns all devices if no paths are given
+// It will returns all SCSI devices if no paths are given
 func GetScsiDevices(devicePaths []string) ([]Device, error) {
 	debug.Printf("Getting info about SCSI devices %s.\n", devicePaths)
 
@@ -443,6 +450,24 @@ func GetScsiDevices(devicePaths []string) ([]Device, error) {
 	}
 
 	return deviceInfo.BlockDevices, nil
+}
+
+// GetIscsiDevices get iSCSI devices from device paths
+// It will returns all iSCSI devices if no paths are given
+func GetIscsiDevices(devicePaths []string) (devices []Device, err error) {
+	scsiDevices, err := GetScsiDevices(devicePaths)
+	if err != nil {
+		return
+	}
+
+	for i := range scsiDevices {
+		device := &scsiDevices[i]
+		if device.Transport == "iscsi" {
+			devices = append(devices, *device)
+		}
+	}
+
+	return
 }
 
 func lsblk(flags string, devicePaths []string) ([]byte, error) {
