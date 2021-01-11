@@ -2,6 +2,7 @@ package iscsi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -471,10 +472,10 @@ func GetIscsiDevices(devicePaths []string) (devices []Device, err error) {
 }
 
 func lsblk(flags string, devicePaths []string) ([]byte, error) {
-	out, err := exec.Command("lsblk", append([]string{flags}, devicePaths...)...).Output()
+	out, err := exec.Command("lsblk", append([]string{flags}, devicePaths...)...).CombinedOutput()
 	debug.Printf("lsblk %s %s", flags, strings.Join(devicePaths, " "))
 	if err != nil {
-		return nil, fmt.Errorf("lsblk: %v", err)
+		return nil, fmt.Errorf("lsblk: %s", string(out))
 	}
 
 	return out, nil
@@ -509,10 +510,10 @@ func RemoveScsiDevices(devices ...Device) error {
 	var errs []error
 	for _, device := range devices {
 		debug.Printf("Flush scsi device %v.\n", device.Name)
-		err := exec.Command("blockdev", "--flushbufs", device.GetPath()).Run()
+		out, err := exec.Command("blockdev", "--flushbufs", device.GetPath()).CombinedOutput()
 		if err != nil {
 			debug.Printf("Command 'blockdev --flushbufs %v' did not succeed to flush the device: %v\n", device.Name, err)
-			return err
+			return errors.New(string(out))
 		}
 
 		debug.Printf("Put scsi device %v offline.\n", device.Name)
