@@ -486,26 +486,23 @@ func lsblk(flags string, devicePaths []string) ([]byte, error) {
 	return out, nil
 }
 
-func writeInScsiDeviceFile(hctl string, file string, content string) (bool, error) {
+func writeInScsiDeviceFile(hctl string, file string, content string) error {
 	filename := filepath.Join("/sys/class/scsi_device", hctl, "device", file)
 	debug.Printf("Write %q in %q.\n", content, filename)
 
 	f, err := os.OpenFile(filename, os.O_TRUNC|os.O_WRONLY, 0200)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return true, nil
-		}
 		debug.Printf("Error while opening file %v: %v\n", filename, err)
-		return false, err
+		return err
 	}
 
 	defer f.Close()
 	if _, err := f.WriteString(content); err != nil {
 		debug.Printf("Error while writing to file %v: %v", filename, err)
-		return false, err
+		return err
 	}
 
-	return false, nil
+	return nil
 }
 
 // RemoveScsiDevices removes scsi device(s) from a Linux host.
@@ -522,20 +519,20 @@ func RemoveScsiDevices(devices ...Device) error {
 		}
 
 		debug.Printf("Put scsi device %v offline.\n", device.Name)
-		skip, err := writeInScsiDeviceFile(device.Hctl, "state", "offline\n")
+		err = device.Shutdown()
 		if err != nil {
-			errs = append(errs, err)
-			continue
-		} else if skip {
+			if !os.IsNotExist(err) { // Ignore device already removed
+				errs = append(errs, err)
+			}
 			continue
 		}
 
 		debug.Printf("Delete scsi device %v.\n", device.Name)
-		skip, err = writeInScsiDeviceFile(device.Hctl, "delete", "1") // Remove a scsi device by echo 1 > /sys/class/scsi_device/h:c:t:l/device/delete
+		err = device.Delete()
 		if err != nil {
-			errs = append(errs, err)
-			continue
-		} else if skip {
+			if !os.IsNotExist(err) { // Ignore device already removed
+				errs = append(errs, err)
+			}
 			continue
 		}
 	}
@@ -585,4 +582,24 @@ func (d *Device) GetPath() string {
 	}
 
 	return filepath.Join("/dev", d.Name)
+}
+
+// WriteDeviceFile write in a device file
+func (d *Device) WriteDeviceFile(name string, content string) error {
+	return writeInScsiDeviceFile(d.Hctl, name, content)
+}
+
+// Shutdown turn off an scsi device by writing offline\n in /sys/class/scsi_device/h:c:t:l/device/state
+func (d *Device) Shutdown() error {
+	return writeInScsiDeviceFile(d.Hctl, "state", "offline\n")
+}
+
+// Delete detach an scsi device by writing 1 in /sys/class/scsi_device/h:c:t:l/device/delete
+func (d *Device) Delete() error {
+	return writeInScsiDeviceFile(d.Hctl, "delete", "1")
+}
+
+// Rescan rescan an scsi device by writing 1 in /sys/class/scsi_device/h:c:t:l/device/rescan
+func (d *Device) Rescan() error {
+	return writeInScsiDeviceFile(d.Hctl, "rescan", "1")
 }
