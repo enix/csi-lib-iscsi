@@ -234,7 +234,7 @@ func getMultipathDevice(devices []Device) (*Device, error) {
 }
 
 // Connect attempts to connect a volume to this node using the provided Connector info
-func Connect(c *Connector) (string, error) {
+func (c *Connector) Connect() (string, error) {
 	var lastErr error
 	if c.RetryCount == 0 {
 		c.RetryCount = 10
@@ -342,7 +342,7 @@ func Connect(c *Connector) (string, error) {
 		return "", fmt.Errorf("failed to find device path: %s, last error seen: %v", devicePaths, lastErr)
 	}
 
-	mountTargetDevice, err := getMountTargetDevice(c)
+	mountTargetDevice, err := c.getMountTargetDevice()
 	c.MountTargetDevice = mountTargetDevice
 	if err != nil {
 		debug.Printf("Connect failed: %v", err)
@@ -366,7 +366,7 @@ func Disconnect(tgtIqn string, portals []string) error {
 }
 
 // DisconnectVolume removes a volume from a Linux host.
-func DisconnectVolume(c *Connector) error {
+func (c *Connector) DisconnectVolume() error {
 	// Steps to safely remove an iSCSI storage volume from a Linux host are as following:
 	// 1. Unmount the disk from a filesystem on the system.
 	// 2. Flush the multipath map for the disk we’re removing (if multipath is enabled).
@@ -377,7 +377,7 @@ func DisconnectVolume(c *Connector) error {
 	// DisconnectVolume focuses on step 2 and 3.
 	// Note: make sure the volume is already unmounted before calling this method.
 
-	if len(c.Devices) > 1 {
+	if c.IsMultipathEnabled() {
 		debug.Printf("Removing multipath device in path %s.\n", c.MountTargetDevice.GetPath())
 		err := FlushMultipathDevice(c.MountTargetDevice)
 		if err != nil {
@@ -403,8 +403,8 @@ func DisconnectVolume(c *Connector) error {
 	return nil
 }
 
-func getMountTargetDevice(c *Connector) (*Device, error) {
-	if len(c.Devices) > 1 {
+func (c *Connector) getMountTargetDevice() (*Device, error) {
+	if c.IsMultipathEnabled() {
 		multipathDevice, err := getMultipathDevice(c.Devices)
 		if err != nil {
 			debug.Printf("mount target is not a multipath device: %v", err)
@@ -419,6 +419,11 @@ func getMountTargetDevice(c *Connector) (*Device, error) {
 	}
 
 	return &c.Devices[0], nil
+}
+
+// IsMultipathEnabled check if multipath is enabled on devices handled by this connector
+func (c *Connector) IsMultipathEnabled() bool {
+	return len(c.Devices) > 1
 }
 
 // GetIscsiDevice get an SCSI device from a device name
@@ -542,8 +547,8 @@ func RemoveScsiDevices(devices ...Device) error {
 	return nil
 }
 
-// PersistConnector persists the provided Connector to the specified file (ie /var/lib/pfile/myConnector.json)
-func PersistConnector(c *Connector, filePath string) error {
+// Persist persists the Connector to the specified file (ie /var/lib/pfile/myConnector.json)
+func (c *Connector) Persist(filePath string) error {
 	//file := path.Join("mnt", c.VolumeName+".json")
 	f, err := os.Create(filePath)
 	if err != nil {
