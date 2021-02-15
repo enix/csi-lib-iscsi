@@ -246,17 +246,11 @@ func getMultipathDevice(devices []Device) (*Device, error) {
 
 // Connect attempts to connect a volume to this node using the provided Connector info
 func (c *Connector) Connect() (string, error) {
-	var lastErr error
 	if c.RetryCount == 0 {
 		c.RetryCount = 10
 	}
 	if c.CheckInterval == 0 {
 		c.CheckInterval = 1
-	}
-
-	if c.RetryCount < 0 || c.CheckInterval < 0 {
-		return "", fmt.Errorf("Invalid RetryCount and CheckInterval combination, both must be positive integers. "+
-			"RetryCount: %d, CheckInterval: %d", c.RetryCount, c.CheckInterval)
 	}
 
 	iFace := "default"
@@ -271,81 +265,23 @@ func (c *Connector) Connect() (string, error) {
 	}
 	iscsiTransport := extractTransportName(out)
 
+	var lastErr error
 	var devicePaths []string
 	for _, target := range c.Targets {
-		debug.Printf("process targetIqn: %s, portal: %s\n", target.Iqn, target.Portal)
-		baseArgs := []string{"-m", "node", "-T", target.Iqn, "-p", target.Portal}
-		// Rescan sessions to discover newly mapped LUNs. Do not specify the interface when rescanning
-		// to avoid establishing additional sessions to the same target.
-		if _, err := iscsiCmd(append(baseArgs, []string{"-R"}...)...); err != nil {
-			debug.Printf("failed to rescan session, err: %v", err)
-		}
-
-		// create our devicePath that we'll be looking for based on the transport being used
-		port := defaultPort
-		if target.Port != "" {
-			port = target.Port
-		}
-		// portal with port
-		p := strings.Join([]string{target.Portal, port}, ":")
-		devicePath := strings.Join([]string{"/dev/disk/by-path/ip", p, "iscsi", target.Iqn, "lun", fmt.Sprint(c.Lun)}, "-")
-		if iscsiTransport != "tcp" {
-			devicePath = strings.Join([]string{"/dev/disk/by-path/pci", "*", "ip", p, "iscsi", target.Iqn, "lun", fmt.Sprint(c.Lun)}, "-")
-		}
-
-		exists, _ := sessionExists(p, target.Iqn)
-		if exists {
-			if exists, err := pathExists(&devicePath, iscsiTransport); exists {
-				debug.Printf("Appending device path: %s", devicePath)
-				devicePaths = append(devicePaths, devicePath)
-				continue
-			} else if err != nil {
-				return "", err
-			}
-		}
-
-		if c.DoDiscovery {
-			// build discoverydb and discover iscsi target
-			if err := Discoverydb(p, iFace, c.DiscoverySecrets, c.DoCHAPDiscovery); err != nil {
-				debug.Printf("Error in discovery of the target: %s\n", err.Error())
-				lastErr = err
-				continue
-			}
-		}
-
-		if c.DoCHAPDiscovery {
-			// Make sure we don't log the secrets
-			err := CreateDBEntry(target.Iqn, p, iFace, c.DiscoverySecrets, c.SessionSecrets)
-			if err != nil {
-				debug.Printf("Error creating db entry: %s\n", err.Error())
-				continue
-			}
-		}
-
-		// perform the login
-		err = Login(target.Iqn, p)
+		devicePath, err := c.connectTarget(&target, iFace, iscsiTransport)
 		if err != nil {
-			debug.Printf("failed to login, err: %v", err)
 			lastErr = err
-			continue
-		}
-
-		if exists, err := waitForPathToExist(&devicePath, int(c.RetryCount), int(c.CheckInterval), iscsiTransport); exists {
+		} else {
+			debug.Printf("Appending device path: %s", devicePath)
 			devicePaths = append(devicePaths, devicePath)
-			continue
-		} else if err != nil {
-			lastErr = fmt.Errorf("Couldn't attach disk, err: %v", err)
 		}
 	}
 
 	// GetIscsiDevices returns all devices if no paths are given
 	if len(devicePaths) < 1 {
 		c.Devices = []Device{}
-	} else {
-		c.Devices, err = GetIscsiDevices(devicePaths)
-		if err != nil {
-			return "", err
-		}
+	} else if c.Devices, err = GetIscsiDevices(devicePaths); err != nil {
+		return "", err
 	}
 
 	if len(c.Devices) < 1 {
@@ -364,6 +300,79 @@ func (c *Connector) Connect() (string, error) {
 	}
 
 	return c.MountTargetDevice.GetPath(), nil
+}
+
+func (c *Connector) connectTarget(target *TargetInfo, iFace string, iscsiTransport string) (string, error) {
+	debug.Printf("Process targetIqn: %s, portal: %s\n", target.Iqn, target.Portal)
+	baseArgs := []string{"-m", "node", "-T", target.Iqn, "-p", target.Portal}
+	// Rescan sessions to discover newly mapped LUNs. Do not specify the interface when rescanning
+	// to avoid establishing additional sessions to the same target.
+	if _, err := iscsiCmd(append(baseArgs, []string{"-R"}...)...); err != nil {
+		debug.Printf("Failed to rescan session, err: %v", err)
+	}
+
+	// create our devicePath that we'll be looking for based on the transport being used
+	port := defaultPort
+	if target.Port != "" {
+		port = target.Port
+	}
+	// portal with port
+	portal := strings.Join([]string{target.Portal, port}, ":")
+	devicePath := strings.Join([]string{"/dev/disk/by-path/ip", portal, "iscsi", target.Iqn, "lun", fmt.Sprint(c.Lun)}, "-")
+	if iscsiTransport != "tcp" {
+		devicePath = strings.Join([]string{"/dev/disk/by-path/pci", "*", "ip", portal, "iscsi", target.Iqn, "lun", fmt.Sprint(c.Lun)}, "-")
+	}
+
+	exists, _ := sessionExists(portal, target.Iqn)
+	if exists {
+		debug.Printf("Session already exists, checking if device path %q exists", devicePath)
+		if exists, err := pathExists(&devicePath, iscsiTransport); exists {
+			return devicePath, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+
+	if err := c.discoverTarget(target, iFace, portal); err != nil {
+		return "", err
+	}
+
+	// perform the login
+	err := Login(target.Iqn, portal)
+	if err != nil {
+		debug.Printf("Failed to login: %v", err)
+		return "", err
+	}
+
+	debug.Printf("Waiting for device path %q to exist", devicePath)
+	if exists, err := waitForPathToExist(&devicePath, c.RetryCount, c.CheckInterval, iscsiTransport); exists {
+		return devicePath, nil
+	} else if err != nil {
+		return "", fmt.Errorf("Couldn't attach disk: %v", err)
+	}
+
+	return "", nil
+}
+
+func (c *Connector) discoverTarget(target *TargetInfo, iFace string, portal string) error {
+	if c.DoDiscovery {
+		// build discoverydb and discover iscsi target
+		if err := Discoverydb(portal, iFace, c.DiscoverySecrets, c.DoCHAPDiscovery); err != nil {
+			debug.Printf("Error in discovery of the target: %s\n", err.Error())
+			return err
+		}
+	}
+
+	if c.DoCHAPDiscovery {
+		// Make sure we don't log the secrets
+		err := CreateDBEntry(target.Iqn, portal, iFace, c.DiscoverySecrets, c.SessionSecrets)
+		if err != nil {
+			debug.Printf("Error creating db entry: %s\n", err.Error())
+			return err
+		}
+	}
+
+	return nil
 }
 
 //Disconnect performs a disconnect operation on a volume
