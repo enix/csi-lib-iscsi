@@ -178,7 +178,7 @@ func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds uint
 		}
 	}
 
-	return false, nil
+	return false, os.ErrNotExist
 }
 
 func pathExists(devicePath *string, deviceTransport string) (bool, error) {
@@ -194,12 +194,12 @@ func pathExistsImpl(devicePath *string, deviceTransport string, osStat statFunc,
 				return false, err
 			}
 			debug.Printf("Device not found for: %s", *devicePath)
-			return false, nil
+			return false, err
 		}
 	} else {
 		fpath, _ := filepathGlob(*devicePath)
 		if fpath == nil {
-			return false, nil
+			return false, os.ErrNotExist
 		}
 		// There might be a case that fpath contains multiple device paths if
 		// multiple PCI devices connect to same iscsi target. We handle this
@@ -348,10 +348,10 @@ func (c *Connector) connectTarget(target *TargetInfo, iFace string, iscsiTranspo
 	if exists, err := waitForPathToExist(&devicePath, c.RetryCount, c.CheckInterval, iscsiTransport); exists {
 		return devicePath, nil
 	} else if err != nil {
-		return "", fmt.Errorf("Couldn't attach disk: %v", err)
+		return "", err
 	}
 
-	return "", nil
+	return "", fmt.Errorf("Could not find device %q", devicePath)
 }
 
 func (c *Connector) discoverTarget(target *TargetInfo, iFace string, portal string) error {
