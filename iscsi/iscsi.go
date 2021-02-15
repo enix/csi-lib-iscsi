@@ -72,10 +72,10 @@ type Connector struct {
 	MountTargetDevice *Device  `json:"mount_target_device"`
 	Devices           []Device `json:"devices"`
 
-	RetryCount      int32 `json:"retry_count"`
-	CheckInterval   int32 `json:"check_interval"`
-	DoDiscovery     bool  `json:"do_discovery"`
-	DoCHAPDiscovery bool  `json:"do_chap_discovery"`
+	RetryCount      uint `json:"retry_count"`
+	CheckInterval   uint `json:"check_interval"`
+	DoDiscovery     bool `json:"do_discovery"`
+	DoCHAPDiscovery bool `json:"do_chap_discovery"`
 }
 
 func init() {
@@ -156,47 +156,58 @@ func getCurrentSessions() ([]iscsiSession, error) {
 	return sessions, err
 }
 
-func waitForPathToExist(devicePath *string, maxRetries, intervalSeconds int, deviceTransport string) (bool, error) {
+func waitForPathToExist(devicePath *string, maxRetries, intervalSeconds uint, deviceTransport string) (bool, error) {
 	return waitForPathToExistImpl(devicePath, maxRetries, intervalSeconds, deviceTransport, os.Stat, filepath.Glob)
 }
 
-func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int, deviceTransport string, osStat statFunc, filepathGlob globFunc) (bool, error) {
+func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds uint, deviceTransport string, osStat statFunc, filepathGlob globFunc) (bool, error) {
 	if devicePath == nil {
 		return false, fmt.Errorf("Unable to check unspecified devicePath")
 	}
 
-	var err error
-	for i := 0; i < maxRetries; i++ {
-		err = nil
-		if deviceTransport == "tcp" {
-			_, err = osStat(*devicePath)
-			if err != nil && !os.IsNotExist(err) {
-				debug.Printf("Error attempting to stat device: %s", err.Error())
-				return false, err
-			} else if err != nil {
-				debug.Printf("Device not found for: %s", *devicePath)
-			}
-
-		} else {
-			fpath, _ := filepathGlob(*devicePath)
-			if fpath == nil {
-				err = os.ErrNotExist
-			} else {
-				// There might be a case that fpath contains multiple device paths if
-				// multiple PCI devices connect to same iscsi target. We handle this
-				// case at subsequent logic. Pick up only first path here.
-				*devicePath = fpath[0]
-			}
+	for i := uint(0); i <= maxRetries; i++ {
+		if i != 0 {
+			debug.Printf("Device path %q doesn't exists yet, retrying in %d seconds (%d/%d)", *devicePath, intervalSeconds, i, maxRetries)
+			time.Sleep(time.Second * time.Duration(intervalSeconds))
 		}
-		if err == nil {
+
+		if exists, err := pathExistsImpl(devicePath, deviceTransport, osStat, filepathGlob); err != nil {
+			return false, err
+		} else if exists {
 			return true, nil
 		}
-		if i == maxRetries-1 {
-			break
-		}
-		time.Sleep(time.Second * time.Duration(intervalSeconds))
 	}
-	return false, err
+
+	return false, nil
+}
+
+func pathExists(devicePath *string, deviceTransport string) (bool, error) {
+	return pathExistsImpl(devicePath, deviceTransport, os.Stat, filepath.Glob)
+}
+
+func pathExistsImpl(devicePath *string, deviceTransport string, osStat statFunc, filepathGlob globFunc) (bool, error) {
+	if deviceTransport == "tcp" {
+		_, err := osStat(*devicePath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				debug.Printf("Error attempting to stat device: %s", err.Error())
+				return false, err
+			}
+			debug.Printf("Device not found for: %s", *devicePath)
+			return false, nil
+		}
+	} else {
+		fpath, _ := filepathGlob(*devicePath)
+		if fpath == nil {
+			return false, nil
+		}
+		// There might be a case that fpath contains multiple device paths if
+		// multiple PCI devices connect to same iscsi target. We handle this
+		// case at subsequent logic. Pick up only first path here.
+		*devicePath = fpath[0]
+	}
+
+	return true, nil
 }
 
 func getMultipathDevice(devices []Device) (*Device, error) {
@@ -284,7 +295,7 @@ func (c *Connector) Connect() (string, error) {
 
 		exists, _ := sessionExists(p, target.Iqn)
 		if exists {
-			if exists, err := waitForPathToExist(&devicePath, 1, 1, iscsiTransport); exists {
+			if exists, err := pathExists(&devicePath, iscsiTransport); exists {
 				debug.Printf("Appending device path: %s", devicePath)
 				devicePaths = append(devicePaths, devicePath)
 				continue
@@ -318,8 +329,8 @@ func (c *Connector) Connect() (string, error) {
 			lastErr = err
 			continue
 		}
-		retries := int(c.RetryCount / c.CheckInterval)
-		if exists, err := waitForPathToExist(&devicePath, retries, int(c.CheckInterval), iscsiTransport); exists {
+
+		if exists, err := waitForPathToExist(&devicePath, int(c.RetryCount), int(c.CheckInterval), iscsiTransport); exists {
 			devicePaths = append(devicePaths, devicePath)
 			continue
 		} else if err != nil {
