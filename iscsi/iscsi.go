@@ -373,13 +373,19 @@ func (c *Connector) discoverTarget(target *TargetInfo, iFace string, portal stri
 }
 
 //Disconnect performs a disconnect operation on a volume
-func Disconnect(tgtIqn string, portals []string) error {
-	err := Logout(tgtIqn, portals)
-	if err != nil {
-		return err
+func (c *Connector) disconnect() {
+	for _, target := range c.Targets {
+		Logout(target.Iqn, target.Portal)
 	}
-	err = DeleteDBEntry(tgtIqn)
-	return err
+
+	deleted := map[string]bool{}
+	for _, target := range c.Targets {
+		if _, ok := deleted[target.Iqn]; ok {
+			continue
+		}
+		deleted[target.Iqn] = true
+		DeleteDBEntry(target.Iqn)
+	}
 }
 
 // DisconnectVolume removes a volume from a Linux host.
@@ -400,7 +406,6 @@ func (c *Connector) DisconnectVolume() error {
 		if err != nil {
 			return err
 		}
-
 		if err := RemoveScsiDevices(c.Devices...); err != nil {
 			return err
 		}
@@ -415,6 +420,8 @@ func (c *Connector) DisconnectVolume() error {
 			return err
 		}
 	}
+
+	c.disconnect()
 
 	debug.Printf("Finished disconnecting volume.\n")
 	return nil
