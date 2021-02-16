@@ -326,7 +326,7 @@ func (c *Connector) connectTarget(target *TargetInfo, iFace string, iscsiTranspo
 	exists, _ := sessionExists(portal, target.Iqn)
 	if exists {
 		debug.Printf("Session already exists, checking if device path %q exists", devicePath)
-		if err := pathExists(&devicePath, iscsiTransport); err != nil {
+		if err := waitForPathToExist(&devicePath, c.RetryCount, c.CheckInterval, iscsiTransport); err != nil {
 			return "", err
 		}
 		return devicePath, nil
@@ -372,8 +372,9 @@ func (c *Connector) discoverTarget(target *TargetInfo, iFace string, portal stri
 	return nil
 }
 
-//Disconnect performs a disconnect operation on a volume
-func (c *Connector) disconnect() {
+// Disconnect performs a disconnect operation from an appliance.
+// Be sure to disconnect all deivces properly before doing this as it can result in data loss.
+func (c *Connector) Disconnect() {
 	for _, target := range c.Targets {
 		Logout(target.Iqn, target.Portal)
 	}
@@ -420,8 +421,6 @@ func (c *Connector) DisconnectVolume() error {
 			return err
 		}
 	}
-
-	c.disconnect()
 
 	debug.Printf("Finished disconnecting volume.\n")
 	return nil
