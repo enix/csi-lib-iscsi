@@ -156,13 +156,13 @@ func getCurrentSessions() ([]iscsiSession, error) {
 	return sessions, err
 }
 
-func waitForPathToExist(devicePath *string, maxRetries, intervalSeconds uint, deviceTransport string) (bool, error) {
+func waitForPathToExist(devicePath *string, maxRetries, intervalSeconds uint, deviceTransport string) error {
 	return waitForPathToExistImpl(devicePath, maxRetries, intervalSeconds, deviceTransport, os.Stat, filepath.Glob)
 }
 
-func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds uint, deviceTransport string, osStat statFunc, filepathGlob globFunc) (bool, error) {
+func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds uint, deviceTransport string, osStat statFunc, filepathGlob globFunc) error {
 	if devicePath == nil {
-		return false, fmt.Errorf("Unable to check unspecified devicePath")
+		return fmt.Errorf("Unable to check unspecified devicePath")
 	}
 
 	for i := uint(0); i <= maxRetries; i++ {
@@ -171,35 +171,35 @@ func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds uint
 			time.Sleep(time.Second * time.Duration(intervalSeconds))
 		}
 
-		if exists, err := pathExistsImpl(devicePath, deviceTransport, osStat, filepathGlob); err != nil {
-			return false, err
-		} else if exists {
-			return true, nil
+		if err := pathExistsImpl(devicePath, deviceTransport, osStat, filepathGlob); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
 		}
 	}
 
-	return false, os.ErrNotExist
+	return os.ErrNotExist
 }
 
-func pathExists(devicePath *string, deviceTransport string) (bool, error) {
+func pathExists(devicePath *string, deviceTransport string) error {
 	return pathExistsImpl(devicePath, deviceTransport, os.Stat, filepath.Glob)
 }
 
-func pathExistsImpl(devicePath *string, deviceTransport string, osStat statFunc, filepathGlob globFunc) (bool, error) {
+func pathExistsImpl(devicePath *string, deviceTransport string, osStat statFunc, filepathGlob globFunc) error {
 	if deviceTransport == "tcp" {
 		_, err := osStat(*devicePath)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				debug.Printf("Error attempting to stat device: %s", err.Error())
-				return false, err
+				return err
 			}
 			debug.Printf("Device not found for: %s", *devicePath)
-			return false, err
+			return err
 		}
 	} else {
 		fpath, _ := filepathGlob(*devicePath)
 		if fpath == nil {
-			return false, os.ErrNotExist
+			return os.ErrNotExist
 		}
 		// There might be a case that fpath contains multiple device paths if
 		// multiple PCI devices connect to same iscsi target. We handle this
@@ -207,7 +207,7 @@ func pathExistsImpl(devicePath *string, deviceTransport string, osStat statFunc,
 		*devicePath = fpath[0]
 	}
 
-	return true, nil
+	return nil
 }
 
 func getMultipathDevice(devices []Device) (*Device, error) {
@@ -326,11 +326,10 @@ func (c *Connector) connectTarget(target *TargetInfo, iFace string, iscsiTranspo
 	exists, _ := sessionExists(portal, target.Iqn)
 	if exists {
 		debug.Printf("Session already exists, checking if device path %q exists", devicePath)
-		if exists, err := pathExists(&devicePath, iscsiTransport); exists {
-			return devicePath, nil
-		} else if err != nil {
+		if err := pathExists(&devicePath, iscsiTransport); err != nil {
 			return "", err
 		}
+		return devicePath, nil
 	}
 
 	if err := c.discoverTarget(target, iFace, portal); err != nil {
@@ -345,13 +344,11 @@ func (c *Connector) connectTarget(target *TargetInfo, iFace string, iscsiTranspo
 	}
 
 	debug.Printf("Waiting for device path %q to exist", devicePath)
-	if exists, err := waitForPathToExist(&devicePath, c.RetryCount, c.CheckInterval, iscsiTransport); exists {
-		return devicePath, nil
-	} else if err != nil {
+	if err := waitForPathToExist(&devicePath, c.RetryCount, c.CheckInterval, iscsiTransport); err != nil {
 		return "", err
 	}
 
-	return "", fmt.Errorf("Could not find device %q", devicePath)
+	return devicePath, nil
 }
 
 func (c *Connector) discoverTarget(target *TargetInfo, iFace string, portal string) error {
