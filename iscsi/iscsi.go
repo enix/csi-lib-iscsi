@@ -536,14 +536,18 @@ func RemoveScsiDevices(devices ...Device) error {
 	var errs []error
 	for _, device := range devices {
 		debug.Printf("Flush scsi device %v.\n", device.Name)
-		out, err := exec.Command("blockdev", "--flushbufs", device.GetPath()).CombinedOutput()
-		if err != nil {
-			debug.Printf("Command 'blockdev --flushbufs %v' did not succeed to flush the device: %v\n", device.Name, err)
-			return errors.New(string(out))
+		if err := device.Exists(); err == nil {
+			out, err := exec.Command("blockdev", "--flushbufs", device.GetPath()).CombinedOutput()
+			if err != nil {
+				debug.Printf("Command 'blockdev --flushbufs %s' did not succeed to flush the device: %v\n", device.GetPath(), err)
+				return errors.New(string(out))
+			}
+		} else if !os.IsNotExist(err) {
+			return err
 		}
 
-		debug.Printf("Put scsi device %v offline.\n", device.Name)
-		err = device.Shutdown()
+		debug.Printf("Put scsi device %q offline.\n", device.Name)
+		err := device.Shutdown()
 		if err != nil {
 			if !os.IsNotExist(err) { // Ignore device already removed
 				errs = append(errs, err)
@@ -551,7 +555,7 @@ func RemoveScsiDevices(devices ...Device) error {
 			continue
 		}
 
-		debug.Printf("Delete scsi device %v.\n", device.Name)
+		debug.Printf("Delete scsi device %q.\n", device.Name)
 		err = device.Delete()
 		if err != nil {
 			if !os.IsNotExist(err) { // Ignore device already removed
@@ -597,6 +601,12 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 	}
 
 	return &data, nil
+}
+
+// Exists check if the device exists at its path and returns an error otherwise
+func (d *Device) Exists() error {
+	_, err := os.Stat(d.GetPath())
+	return err
 }
 
 // GetPath returns the path of a device
