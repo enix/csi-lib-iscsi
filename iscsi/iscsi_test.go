@@ -393,7 +393,7 @@ func Test_DisconnectMultipathVolume(t *testing.T) {
 	}
 }
 
-func TestEnableDebugLogging(t *testing.T) {
+func Test_EnableDebugLogging(t *testing.T) {
 	assert := assert.New(t)
 	data := []byte{}
 	writer := testWriter{data: &data}
@@ -407,7 +407,7 @@ func TestEnableDebugLogging(t *testing.T) {
 	assert.Len(strings.Split(string(data), "\n"), 2)
 }
 
-func TestWaitForPathToExist(t *testing.T) {
+func Test_waitForPathToExist(t *testing.T) {
 	tests := map[string]struct {
 		attempts     int
 		fileNotFound bool
@@ -524,6 +524,68 @@ func TestWaitForPathToExist(t *testing.T) {
 	})
 }
 
+func Test_getMultipathDevice(t *testing.T) {
+	mpath1 := Device{Name: "3600c0ff0000000000000000000000000", Type: "mpath"}
+	mpath2 := Device{Name: "3600c0ff1111111111111111111111111", Type: "mpath"}
+	sda := Device{Name: "sda", Children: []Device{{Name: "sda1"}}}
+	sdb := Device{Name: "sdb", Children: []Device{mpath1}}
+	sdc := Device{Name: "sdc", Children: []Device{mpath1}}
+	sdd := Device{Name: "sdc", Children: []Device{mpath2}}
+	sde := Device{Name: "sdc", Children: []Device{mpath1, mpath2}}
+
+	tests := map[string]struct {
+		mockedDevices    deviceInfo
+		mockedStdout     string
+		mockedExitStatus int
+		multipathDevice  *Device
+		wantErr          bool
+	}{
+		"Basic": {
+			mockedDevices:   deviceInfo{BlockDevices: []Device{sdb, sdc}},
+			multipathDevice: &mpath1,
+		},
+		"NotABlockDevice": {
+			mockedStdout:     "lsblk: sdzz: not a block device",
+			mockedExitStatus: 32,
+		},
+		"NotSharingTheSameMultipathDevice": {
+			mockedDevices: deviceInfo{BlockDevices: []Device{sdb, sdd}},
+			wantErr:       true,
+		},
+		"MoreThanOneMultipathDevice": {
+			mockedDevices: deviceInfo{BlockDevices: []Device{sde}},
+			wantErr:       true,
+		},
+		"NotAMultipathDevice": {
+			mockedDevices: deviceInfo{BlockDevices: []Device{sda}},
+			wantErr:       true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert := assert.New(t)
+			mockedStdout := tt.mockedStdout
+			if mockedStdout == "" {
+				out, err := json.Marshal(tt.mockedDevices)
+				assert.Nil(err, "could not setup test")
+				mockedStdout = string(out)
+			}
+
+			gostub.Stub(&execCommand, makeFakeExecCommand(tt.mockedExitStatus, string(mockedStdout)))
+			multipathDevice, err := getMultipathDevice(tt.mockedDevices.BlockDevices)
+
+			if tt.mockedExitStatus != 0 || tt.wantErr {
+				assert.Nil(multipathDevice)
+				assert.NotNil(err)
+			} else {
+				assert.Equal(tt.multipathDevice, multipathDevice)
+				assert.Nil(err)
+			}
+		})
+	}
+}
+
 func TestConnectorPersistance(t *testing.T) {
 	assert := assert.New(t)
 
@@ -571,9 +633,11 @@ func TestConnectorPersistance(t *testing.T) {
 
 	c.Persist("/tmp/connector.json")
 	c2, err := GetConnectorFromFile("/tmp/connector.json")
-
 	assert.Nil(err)
 	assert.Equal(c, *c2)
+
+	err = c.Persist("/tmp")
+	assert.NotNil(err)
 
 	os.Remove("/tmp/shouldNotExists.json")
 	_, err = GetConnectorFromFile("/tmp/shouldNotExists.json")
