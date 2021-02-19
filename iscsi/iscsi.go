@@ -27,6 +27,7 @@ var (
 	osStat             = os.Stat
 	filepathGlob       = filepath.Glob
 	osOpenFile         = os.OpenFile
+	sleep              = time.Sleep
 )
 
 type iscsiSession struct {
@@ -158,14 +159,14 @@ func getCurrentSessions() ([]iscsiSession, error) {
 }
 
 func waitForPathToExist(devicePath *string, maxRetries, intervalSeconds uint, deviceTransport string) error {
-	if devicePath == nil {
+	if devicePath == nil || *devicePath == "" {
 		return fmt.Errorf("Unable to check unspecified devicePath")
 	}
 
 	for i := uint(0); i <= maxRetries; i++ {
 		if i != 0 {
 			debug.Printf("Device path %q doesn't exists yet, retrying in %d seconds (%d/%d)", *devicePath, intervalSeconds, i, maxRetries)
-			time.Sleep(time.Second * time.Duration(intervalSeconds))
+			sleep(time.Second * time.Duration(intervalSeconds))
 		}
 
 		if err := pathExists(devicePath, deviceTransport); err == nil {
@@ -190,7 +191,11 @@ func pathExists(devicePath *string, deviceTransport string) error {
 			return err
 		}
 	} else {
-		fpath, _ := filepathGlob(*devicePath)
+		fpath, err := filepathGlob(*devicePath)
+
+		if err != nil {
+			return err
+		}
 		if fpath == nil {
 			return os.ErrNotExist
 		}
