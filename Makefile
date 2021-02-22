@@ -17,5 +17,5 @@ test:
 	go test ./iscsi/
 
 coverage:
-	go test ./iscsi -coverprofile=coverage.out
+	go test ./iscsi -coverprofile=coverage.out -run ^Test_Connect$
 	go tool cover -html=coverage.out

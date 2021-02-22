@@ -27,12 +27,8 @@ func (w testWriter) Write(data []byte) (n int, err error) {
 	return len(data), nil
 }
 
-const nodeDB = `
-# BEGIN RECORD 6.2.0.874
-node.name = iqn.2010-10.org.openstack:volume-eb393993-73d0-4e39-9ef4-b5841e244ced
-node.tpgt = -1
-node.startup = automatic
-node.leading_login = No
+const targetIqn = "iqn.2010-10.org.openstack:volume-eb393993-73d0-4e39-9ef4-b5841e244ced"
+const defaultIface = `
 iface.iscsi_ifacename = default
 iface.transport_name = tcp
 iface.vlan_id = 0
@@ -50,6 +46,15 @@ iface.max_receive_data_len = 0
 iface.first_burst_len = 0
 iface.max_outstanding_r2t = 0
 iface.max_burst_len = 0
+`
+
+const nodeDB = `
+# BEGIN RECORD 6.2.0.874
+node.name = ` + targetIqn + `
+node.tpgt = -1
+node.startup = automatic
+node.leading_login = No
+` + defaultIface + `
 node.discovery_port = 0
 node.discovery_type = static
 node.session.initial_cmdsn = 0
@@ -580,6 +585,80 @@ func Test_getMultipathDevice(t *testing.T) {
 				assert.NotNil(err)
 			} else {
 				assert.Equal(tt.multipathDevice, multipathDevice)
+				assert.Nil(err)
+			}
+		})
+	}
+}
+
+func Test_Connect(t *testing.T) {
+	type mockedExec struct {
+		mockedStdout     string
+		mockedExitStatus int
+	}
+	newMockedExec := func(mockedExitStatus int, mockedStdout string) *mockedExec {
+		return &mockedExec{
+			mockedStdout:     mockedStdout,
+			mockedExitStatus: mockedExitStatus,
+		}
+	}
+	makeMockedExecCommand := func(mockedExec *mockedExec) func(string, ...string) *exec.Cmd {
+		return makeFakeExecCommand(mockedExec.mockedExitStatus, mockedExec.mockedStdout)
+	}
+
+	tests := map[string]struct {
+		showInterface *mockedExec
+		getSessions   *mockedExec
+		wantErr       bool
+	}{
+		"Basic": {
+			// wantErr: true,
+			showInterface: newMockedExec(0, defaultIface),
+			getSessions: newMockedExec(0, `tcp: [1] 10.14.84.215:3260,1 iqn.2015-11.com.hpe:storage.msa2050.2002518b4c (non-flash)
+			tcp: [2] 10.14.84.225:3260,2 iqn.2015-11.com.hpe:storage.msa2050.2002518b4c (non-flash)
+			`),
+		},
+		"InterfaceDoesNotExists": {
+			showInterface: newMockedExec(6, "iscsiadm: Could not read iface fakeiface (6)."),
+			wantErr:       true,
+		},
+	}
+
+	defer gostub.Stub(&sleep, func(time.Duration) {}).Reset()
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert := assert.New(t)
+
+			defer gostub.Stub(&execCommand, func(command string, args ...string) *exec.Cmd {
+				fmt.Println(command + " " + strings.Join(args, " "))
+				if command == "iscsiadm" {
+					if strings.Contains(strings.Join(args, " "), "-m iface -o show") {
+						return makeMockedExecCommand(tt.showInterface)(command, args...)
+					} else if strings.Contains(strings.Join(args, " "), "-m session") {
+						return makeMockedExecCommand(tt.getSessions)(command, args...)
+					}
+				} else if command == "lsblk" {
+					return makeFakeExecCommand(0, "{}")(command, args...)
+				}
+				return makeFakeExecCommand(0, "")(command, args...)
+			}).Reset()
+			defer gostub.Stub(&osStat, func(name string) (os.FileInfo, error) {
+				return nil, nil
+			}).Reset()
+
+			c := Connector{
+				Targets: []TargetInfo{
+					{Iqn: targetIqn},
+				},
+			}
+			mountTargetPath, err := c.Connect()
+
+			if tt.wantErr {
+				assert.Equal("", mountTargetPath)
+				assert.NotNil(err)
+			} else {
+				assert.NotEqual("", mountTargetPath)
 				assert.Nil(err)
 			}
 		})

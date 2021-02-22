@@ -145,7 +145,6 @@ func extractTransportName(output string) string {
 }
 
 func getCurrentSessions() ([]iscsiSession, error) {
-
 	out, err := GetSessions()
 	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
