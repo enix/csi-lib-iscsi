@@ -59,6 +59,7 @@ type Device struct {
 	Model     string   `json:"model"`
 	Revision  string   `json:"rev"`
 	Transport string   `json:"tran"`
+	Size      string   `json:"size,omitempty"`
 }
 
 //Connector provides a struct to hold all of the needed parameters to make our iscsi connection
@@ -292,6 +293,12 @@ func (c *Connector) Connect() (string, error) {
 		return "", err
 	}
 
+	if c.IsMultipathEnabled() {
+		if err := c.isMultipathConsistent(); err != nil {
+			return "", fmt.Errorf("multipath is unconsistent: %v", err)
+		}
+	}
+
 	return c.MountTargetDevice.GetPath(), nil
 }
 
@@ -395,6 +402,10 @@ func (c *Connector) DisconnectVolume() error {
 	// Note: make sure the volume is already unmounted before calling this method.
 
 	if c.IsMultipathEnabled() {
+		if err := c.isMultipathConsistent(); err != nil {
+			return fmt.Errorf("multipath is unconsistent: %v", err)
+		}
+
 		debug.Printf("Removing multipath device in path %s.\n", c.MountTargetDevice.GetPath())
 		err := FlushMultipathDevice(c.MountTargetDevice)
 		if err != nil {
@@ -483,7 +494,7 @@ func lsblkRaw(flags string, devicePaths []string) ([]byte, error) {
 func lsblk(flags string, devicePaths []string) (*deviceInfo, error) {
 	var deviceInfo deviceInfo
 
-	out, err := lsblkRaw("-J "+flags, devicePaths)
+	out, err := lsblkRaw(strings.Trim("-J "+flags, " "), devicePaths)
 	if err != nil {
 		return nil, err
 	}
@@ -586,6 +597,31 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 	}
 
 	return &data, nil
+}
+
+func (c *Connector) isMultipathConsistent() error {
+	devicesPaths := []string{c.MountTargetDevice.GetPath()}
+	for _, device := range c.Devices {
+		devicesPaths = append(devicesPaths, device.GetPath())
+	}
+
+	devicesInfo, err := lsblk("", devicesPaths)
+	if err != nil {
+		return err
+	}
+
+	if len(devicesInfo.BlockDevices) < 1 {
+		return errors.New("devices not found")
+	}
+
+	referenceDevice := devicesInfo.BlockDevices[0]
+	for _, device := range devicesInfo.BlockDevices {
+		if device.Size != referenceDevice.Size {
+			return fmt.Errorf("devices size differ: %s (%s) != %s (%s)", device.Name, device.Size, referenceDevice.Name, referenceDevice.Size)
+		}
+	}
+
+	return nil
 }
 
 // Exists check if the device exists at its path and returns an error otherwise

@@ -361,6 +361,8 @@ func Test_DisconnectMultipathVolume(t *testing.T) {
 				return os.OpenFile(testRootFS+name, flag, perm)
 			}).Reset()
 
+			defer gostub.Stub(&execCommand, makeFakeExecCommand(0, `{"blockdevices": [{}]}`)).Reset()
+
 			if tt.withDeviceFile {
 				if err := preparePaths(c.Devices); err != nil {
 					t.Errorf("could not prepare paths: %v", err)
@@ -534,14 +536,14 @@ func Test_getMultipathDevice(t *testing.T) {
 	sde := Device{Name: "sdc", Children: []Device{mpath1, mpath2}}
 
 	tests := map[string]struct {
-		mockedDevices    deviceInfo
+		mockedDevices    []Device
 		mockedStdout     string
 		mockedExitStatus int
 		multipathDevice  *Device
 		wantErr          bool
 	}{
 		"Basic": {
-			mockedDevices:   deviceInfo{BlockDevices: []Device{sdb, sdc}},
+			mockedDevices:   []Device{sdb, sdc},
 			multipathDevice: &mpath1,
 		},
 		"NotABlockDevice": {
@@ -549,15 +551,15 @@ func Test_getMultipathDevice(t *testing.T) {
 			mockedExitStatus: 32,
 		},
 		"NotSharingTheSameMultipathDevice": {
-			mockedDevices: deviceInfo{BlockDevices: []Device{sdb, sdd}},
+			mockedDevices: []Device{sdb, sdd},
 			wantErr:       true,
 		},
 		"MoreThanOneMultipathDevice": {
-			mockedDevices: deviceInfo{BlockDevices: []Device{sde}},
+			mockedDevices: []Device{sde},
 			wantErr:       true,
 		},
 		"NotAMultipathDevice": {
-			mockedDevices: deviceInfo{BlockDevices: []Device{sda}},
+			mockedDevices: []Device{sda},
 			wantErr:       true,
 		},
 	}
@@ -567,13 +569,13 @@ func Test_getMultipathDevice(t *testing.T) {
 			assert := assert.New(t)
 			mockedStdout := tt.mockedStdout
 			if mockedStdout == "" {
-				out, err := json.Marshal(tt.mockedDevices)
+				out, err := json.Marshal(deviceInfo{BlockDevices: tt.mockedDevices})
 				assert.Nil(err, "could not setup test")
 				mockedStdout = string(out)
 			}
 
-			gostub.Stub(&execCommand, makeFakeExecCommand(tt.mockedExitStatus, string(mockedStdout)))
-			multipathDevice, err := getMultipathDevice(tt.mockedDevices.BlockDevices)
+			defer gostub.Stub(&execCommand, makeFakeExecCommand(tt.mockedExitStatus, string(mockedStdout))).Reset()
+			multipathDevice, err := getMultipathDevice(tt.mockedDevices)
 
 			if tt.mockedExitStatus != 0 || tt.wantErr {
 				assert.Nil(multipathDevice)
@@ -648,4 +650,80 @@ func TestConnectorPersistance(t *testing.T) {
 	_, err = GetConnectorFromFile("/tmp/connector.json")
 	assert.NotNil(err)
 	assert.IsType(&json.SyntaxError{}, err)
+}
+
+func Test_isMultipathConsistent(t *testing.T) {
+	mpath1 := Device{Name: "3600c0ff0000000000000000000000000", Size: "10G"}
+	sda := Device{Name: "sda", Size: "10G"}
+	sdb := Device{Name: "sdb", Size: "10G"}
+	sdc := Device{Name: "sdc", Size: "5G"}
+	sdd := Device{Name: "sdc", Size: "5G"}
+
+	tests := map[string]struct {
+		connector        *Connector
+		mockedStdout     string
+		mockedExitStatus int
+		wantErr          bool
+	}{
+		"Basic": {
+			connector: &Connector{
+				MountTargetDevice: &mpath1,
+				Devices:           []Device{sda, sdb},
+			},
+		},
+		"Different sizes 1": {
+			connector: &Connector{
+				MountTargetDevice: &mpath1,
+				Devices:           []Device{sda, sdc},
+			},
+			wantErr: true,
+		},
+		"Different sizes 2": {
+			connector: &Connector{
+				MountTargetDevice: &mpath1,
+				Devices:           []Device{sdc, sdd},
+			},
+			wantErr: true,
+		},
+		"Not a block device": {
+			connector: &Connector{
+				MountTargetDevice: &mpath1,
+				Devices:           []Device{sdc, sdd},
+			},
+			mockedStdout:     "lsblk: foo: not a block device\nlsblk: bar: not a block device\nlsblk: foobar: not a block device\n",
+			mockedExitStatus: 32,
+			wantErr:          true,
+		},
+		"Devices not found": {
+			connector: &Connector{
+				MountTargetDevice: &mpath1,
+				Devices:           []Device{sdc, sdd},
+			},
+			mockedStdout: `{"blockdevices": []}`,
+			wantErr:      true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert := assert.New(t)
+			mockedStdout := tt.mockedStdout
+			c := tt.connector
+			if mockedStdout == "" {
+				devices := append([]Device{*c.MountTargetDevice}, c.Devices...)
+				out, err := json.Marshal(deviceInfo{BlockDevices: devices})
+				assert.Nil(err, "could not setup test")
+				mockedStdout = string(out)
+			}
+
+			defer gostub.Stub(&execCommand, makeFakeExecCommand(tt.mockedExitStatus, string(mockedStdout))).Reset()
+			err := c.isMultipathConsistent()
+
+			if tt.wantErr {
+				assert.Error(err)
+			} else {
+				assert.Nil(err)
+			}
+		})
+	}
 }
