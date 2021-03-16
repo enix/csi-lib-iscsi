@@ -454,7 +454,7 @@ func (c *Connector) IsMultipathEnabled() bool {
 func GetScsiDevices(devicePaths []string) ([]Device, error) {
 	debug.Printf("Getting info about SCSI devices %s.\n", devicePaths)
 
-	deviceInfo, err := lsblk("-S", devicePaths)
+	deviceInfo, err := lsblk("S", devicePaths)
 	if err != nil {
 		debug.Printf("An error occured while looking info about SCSI devices: %v", err)
 		return nil, err
@@ -494,7 +494,7 @@ func lsblkRaw(flags string, devicePaths []string) ([]byte, error) {
 func lsblk(flags string, devicePaths []string) (*deviceInfo, error) {
 	var deviceInfo deviceInfo
 
-	out, err := lsblkRaw(strings.Trim("-J "+flags, " "), devicePaths)
+	out, err := lsblkRaw("-J"+flags, devicePaths)
 	if err != nil {
 		return nil, err
 	}
