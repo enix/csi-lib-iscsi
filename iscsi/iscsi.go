@@ -295,7 +295,7 @@ func (c *Connector) Connect() (string, error) {
 
 	if c.IsMultipathEnabled() {
 		if err := c.isMultipathConsistent(); err != nil {
-			return "", fmt.Errorf("multipath is unconsistent: %v", err)
+			return "", fmt.Errorf("multipath is inconsistent: %v", err)
 		}
 	}
 
@@ -403,7 +403,7 @@ func (c *Connector) DisconnectVolume() error {
 
 	if c.IsMultipathEnabled() {
 		if err := c.isMultipathConsistent(); err != nil {
-			return fmt.Errorf("multipath is unconsistent: %v", err)
+			return fmt.Errorf("multipath is inconsistent: %v", err)
 		}
 
 		debug.Printf("Removing multipath device in path %s.\n", c.MountTargetDevice.GetPath())
