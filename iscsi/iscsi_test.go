@@ -602,9 +602,6 @@ func TestConnectorPersistance(t *testing.T) {
 		Name:      "child name",
 		Hctl:      "child hctl",
 		Type:      "child type",
-		Vendor:    "child vendor",
-		Model:     "child model",
-		Revision:  "child revision",
 		Transport: "child transport",
 	}
 	device := Device{
@@ -612,9 +609,6 @@ func TestConnectorPersistance(t *testing.T) {
 		Hctl:      "device hctl",
 		Children:  []Device{childDevice},
 		Type:      "device type",
-		Vendor:    "device vendor",
-		Model:     "device model",
-		Revision:  "device revision",
 		Transport: "device transport",
 	}
 	c := Connector{
