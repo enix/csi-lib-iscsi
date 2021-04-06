@@ -59,6 +59,13 @@ type Device struct {
 	Size      string   `json:"size,omitempty"`
 }
 
+type HCTL struct {
+	HBA     int
+	Channel int
+	Target  int
+	LUN     int
+}
+
 //Connector provides a struct to hold all of the needed parameters to make our iscsi connection
 type Connector struct {
 	VolumeName       string       `json:"volume_name"`
@@ -471,8 +478,9 @@ func GetIscsiDevices(devicePaths []string) (devices []Device, err error) {
 
 func lsblk(devicePaths []string) (*deviceInfo, error) {
 	flags := []string{"-J", "-o", "NAME,HCTL,TYPE,TRAN,SIZE"}
-	debug.Printf("lsblk %s %s", flags, strings.Join(devicePaths, " "))
-	out, err := execCommand("lsblk", append(flags, devicePaths...)...).CombinedOutput()
+	command := execCommand("lsblk", append(flags, devicePaths...)...)
+	debug.Println(command.String())
+	out, err := command.CombinedOutput()
 	if err != nil {
 		return nil, errors.New(string(out))
 	}
@@ -595,10 +603,42 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 func (c *Connector) isMultipathConsistent() error {
 	devices := append([]Device{*c.MountTargetDevice}, c.Devices...)
 
+	referenceLUN := struct {
+		LUN  int
+		Name string
+	}{LUN: -1, Name: ""}
+	HBA := map[int]string{}
 	referenceDevice := devices[0]
 	for _, device := range devices {
 		if device.Size != referenceDevice.Size {
 			return fmt.Errorf("devices size differ: %s (%s) != %s (%s)", device.Name, device.Size, referenceDevice.Name, referenceDevice.Size)
+		}
+
+		if device.Type != "mpath" {
+			hctl, err := device.HCTL()
+			if err != nil {
+				return err
+			}
+			if referenceLUN.LUN == -1 {
+				referenceLUN.LUN = hctl.LUN
+				referenceLUN.Name = device.Name
+			} else if hctl.LUN != referenceLUN.LUN {
+				return fmt.Errorf("devices LUNs differ: %s (%d) != %s (%d)", device.Name, hctl.LUN, referenceLUN.Name, referenceLUN.LUN)
+			}
+
+			if name, ok := HBA[hctl.HBA]; !ok {
+				HBA[hctl.HBA] = device.Name
+			} else {
+				return fmt.Errorf("two devices are using the same controller (%d): %s and %s", hctl.HBA, device.Name, name)
+			}
+		}
+
+		wwid, err := device.WWID()
+		if err != nil {
+			return fmt.Errorf("could not find WWID for device %s", device.Name)
+		}
+		if wwid != referenceDevice.Name {
+			return fmt.Errorf("devices WWIDs differ: %s (%s) != %s (%s)", device.Name, wwid, "referenceDevice.Name", "referenceDevice.Name")
 		}
 	}
 
@@ -618,6 +658,43 @@ func (d *Device) GetPath() string {
 	}
 
 	return filepath.Join("/dev", d.Name)
+}
+
+// WWID returns the WWID of a device
+func (d *Device) WWID() (string, error) {
+	command := execCommand("/lib/udev/scsi_id", "-g", "-u", d.GetPath())
+	debug.Println(command.String())
+
+	out, err := command.CombinedOutput()
+	if err != nil {
+		return "", errors.New("WWID not found")
+	}
+
+	return string(out[:len(out)-1]), nil
+}
+
+func (d *Device) HCTL() (*HCTL, error) {
+	var hctl []int
+
+	for _, idstr := range strings.Split(d.Hctl, ":") {
+		id, err := strconv.Atoi(idstr)
+		if err != nil {
+			hctl = []int{}
+			break
+		}
+		hctl = append(hctl, id)
+	}
+
+	if len(hctl) != 4 {
+		return nil, fmt.Errorf("invalid HCTL (%s) for device %q", d.Hctl, d.Name)
+	}
+
+	return &HCTL{
+		HBA:     hctl[0],
+		Channel: hctl[1],
+		Target:  hctl[2],
+		LUN:     hctl[3],
+	}, nil
 }
 
 // WriteDeviceFile write in a device file
