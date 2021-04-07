@@ -638,7 +638,7 @@ func (c *Connector) isMultipathConsistent() error {
 			return fmt.Errorf("could not find WWID for device %s", device.Name)
 		}
 		if wwid != referenceDevice.Name {
-			return fmt.Errorf("devices WWIDs differ: %s (%s) != %s (%s)", device.Name, wwid, "referenceDevice.Name", "referenceDevice.Name")
+			return fmt.Errorf("devices WWIDs differ: %s (wwid:%s) != %s (wwid:%s)", device.Name, wwid, referenceDevice.Name, referenceDevice.Name)
 		}
 	}
 
