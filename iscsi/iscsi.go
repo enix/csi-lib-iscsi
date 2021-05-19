@@ -662,14 +662,9 @@ func (d *Device) GetPath() string {
 
 // WWID returns the WWID of a device
 func (d *Device) WWID() (string, error) {
-	command := execCommand("scsi_id", "-g", "-u", d.GetPath())
-	debug.Println(command.String())
-
-	out, err := command.CombinedOutput()
+	timeout := 1 * time.Second
+	out, err := execWithTimeout("scsi_id", []string{"-g", "-u", d.GetPath()}, timeout)
 	if err != nil {
-		if len(out) > 0 {
-			return "", errors.New(string(out))
-		}
 		return "", err
 	}
 
