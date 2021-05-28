@@ -480,9 +480,12 @@ func lsblk(devicePaths []string) (*deviceInfo, error) {
 	flags := []string{"-J", "-o", "NAME,HCTL,TYPE,TRAN,SIZE"}
 	command := execCommand("lsblk", append(flags, devicePaths...)...)
 	debug.Println(command.String())
-	out, err := command.CombinedOutput()
+	out, err := command.Output()
 	if err != nil {
-		return nil, errors.New(string(out))
+		if ee, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("%s, (%v)", strings.Trim(string(ee.Stderr), "\n"), ee)
+		}
+		return nil, err
 	}
 
 	var deviceInfo deviceInfo
