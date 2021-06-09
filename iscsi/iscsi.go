@@ -218,16 +218,20 @@ func getMultipathDevice(devices []Device) (*Device, error) {
 
 	for _, device := range devices {
 		if len(device.Children) != 1 {
-			return nil, fmt.Errorf("Device is not mapped to exactly one multipath device: %v", device.Children)
+			return nil, fmt.Errorf("device is not mapped to exactly one multipath device: %v", device.Children)
 		}
 		if multipathDevice != nil && device.Children[0].Name != multipathDevice.Name {
-			return nil, fmt.Errorf("Devices don't share a common multipath device: %v", devices)
+			return nil, fmt.Errorf("devices don't share a common multipath device: %v", devices)
 		}
 		multipathDevice = &device.Children[0]
 	}
 
+	if multipathDevice == nil {
+		return nil, fmt.Errorf("multipath device not found")
+	}
+
 	if multipathDevice.Type != "mpath" {
-		return nil, fmt.Errorf("Device is not of mpath type: %v", multipathDevice)
+		return nil, fmt.Errorf("device is not of mpath type: %v", multipathDevice)
 	}
 
 	return multipathDevice, nil
