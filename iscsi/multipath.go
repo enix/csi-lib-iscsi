@@ -2,6 +2,7 @@ package iscsi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -81,6 +82,53 @@ func ResizeMultipathDevice(device *Device) error {
 
 	if output, err := execCommand("multipathd", "resize", "map", device.Name).CombinedOutput(); err != nil {
 		return fmt.Errorf("could not resize multipath device: %s (%v)", output, err)
+	}
+
+	return nil
+}
+
+func addMultipathMap(devicePaths []string) error {
+	var wwid string
+	var path string
+
+	for _, devicePath := range devicePaths {
+		deviceWWID, err := getDeviceWWID(devicePath)
+		if err != nil {
+			return err
+		}
+
+		if wwid == "" {
+			wwid = deviceWWID
+			path = devicePath
+		} else if deviceWWID != wwid {
+			return errors.New(fmt.Sprintf("wwids doesn't match (%q != %q) for devices %q and %q", deviceWWID, wwid, devicePath, path))
+		}
+	}
+
+	if output, err := execCommand("multipathd", "add", "map", wwid).CombinedOutput(); err != nil {
+		return fmt.Errorf("could not add multipath map: %s (%v)", output, err)
+	}
+
+	for _, devicePath := range devicePaths {
+		// maybe have to convert path to the form /dev/sdx or sdx first
+		if output, err := execCommand("multipathd", "add", "path", devicePath).CombinedOutput(); err != nil {
+			return fmt.Errorf("could not add multipath path: %s (%v)", output, err)
+		}
+	}
+
+	return nil
+}
+
+func removeMultipathMap(wwid string, devices []Device) error {
+	for _, device := range devices {
+		// check with .Name et .GetPath()
+		if output, err := execCommand("multipathd", "remove", "path", device.Name).CombinedOutput(); err != nil {
+			return fmt.Errorf("could not remove multipath path: %s (%v)", output, err)
+		}
+	}
+
+	if output, err := execCommand("multipathd", "remove", "map", wwid).CombinedOutput(); err != nil {
+		return fmt.Errorf("could not remove multipath map: %s (%v)", output, err)
 	}
 
 	return nil

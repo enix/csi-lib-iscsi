@@ -79,10 +79,11 @@ type Connector struct {
 	MountTargetDevice *Device  `json:"mount_target_device"`
 	Devices           []Device `json:"devices"`
 
-	RetryCount      uint `json:"retry_count"`
-	CheckInterval   uint `json:"check_interval"`
-	DoDiscovery     bool `json:"do_discovery"`
-	DoCHAPDiscovery bool `json:"do_chap_discovery"`
+	RetryCount       uint `json:"retry_count"`
+	CheckInterval    uint `json:"check_interval"`
+	DoDiscovery      bool `json:"do_discovery"`
+	DoCHAPDiscovery  bool `json:"do_chap_discovery"`
+	ManageMultipaths bool `json:"manage_multipaths"`
 }
 
 func init() {
@@ -274,6 +275,12 @@ func (c *Connector) Connect() (string, error) {
 		}
 	}
 
+	if c.ManageMultipaths {
+		if err := addMultipathMap(devicePaths); err != nil {
+			return "", err
+		}
+	}
+
 	// GetIscsiDevices returns all devices if no paths are given
 	if len(devicePaths) < 1 {
 		c.Devices = []Device{}
@@ -376,7 +383,7 @@ func (c *Connector) discoverTarget(target *TargetInfo, iFace string, portal stri
 }
 
 // Disconnect performs a disconnect operation from an appliance.
-// Be sure to disconnect all deivces properly before doing this as it can result in data loss.
+// Be sure to disconnect all devices properly before doing this as it can result in data loss.
 func (c *Connector) Disconnect() {
 	for _, target := range c.Targets {
 		Logout(target.Iqn, target.Portal)
@@ -405,17 +412,27 @@ func (c *Connector) DisconnectVolume() error {
 	// Note: make sure the volume is already unmounted before calling this method.
 
 	if c.IsMultipathEnabled() {
+		mountTargetDeviceWWID, err := c.MountTargetDevice.WWID()
+		if err != nil {
+			return err
+		}
+
 		if err := c.isMultipathConsistent(); err != nil {
 			return fmt.Errorf("multipath is inconsistent: %v", err)
 		}
 
 		debug.Printf("Removing multipath device in path %s.\n", c.MountTargetDevice.GetPath())
-		err := FlushMultipathDevice(c.MountTargetDevice)
-		if err != nil {
+		if err := FlushMultipathDevice(c.MountTargetDevice); err != nil {
 			return err
 		}
 		if err := RemoveScsiDevices(c.Devices...); err != nil {
 			return err
+		}
+
+		if c.ManageMultipaths {
+			if err := removeMultipathMap(mountTargetDeviceWWID, c.Devices); err != nil {
+				return err
+			}
 		}
 	} else {
 		devicePath := c.MountTargetDevice.GetPath()
@@ -676,15 +693,20 @@ func (d *Device) GetPath() string {
 	return filepath.Join("/dev", d.Name)
 }
 
-// WWID returns the WWID of a device
-func (d *Device) WWID() (string, error) {
+func getDeviceWWID(devicePath string) (string, error) {
 	timeout := 1 * time.Second
-	out, err := execWithTimeout("scsi_id", []string{"-g", "-u", d.GetPath()}, timeout)
+	out, err := execWithTimeout("scsi_id", []string{"-g", "-u", devicePath}, timeout)
 	if err != nil {
 		return "", err
 	}
 
 	return string(out[:len(out)-1]), nil
+
+}
+
+// WWID returns the WWID of a device
+func (d *Device) WWID() (string, error) {
+	return getDeviceWWID(d.GetPath())
 }
 
 func (d *Device) HCTL() (*HCTL, error) {
