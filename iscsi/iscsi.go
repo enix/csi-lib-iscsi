@@ -98,7 +98,7 @@ func EnableDebugLogging(writer io.Writer) {
 
 // parseSession takes the raw stdout from the iscsiadm -m session command and encodes it into an iscsi session type
 func parseSessions(lines string) []iscsiSession {
-	entries := strings.Split(strings.TrimSpace(string(lines)), "\n")
+	entries := strings.Split(strings.TrimSpace(lines), "\n")
 	r := strings.NewReplacer("[", "",
 		"]", "")
 
@@ -165,7 +165,7 @@ func getCurrentSessions() ([]iscsiSession, error) {
 
 func waitForPathToExist(devicePath *string, maxRetries, intervalSeconds uint, deviceTransport string) error {
 	if devicePath == nil || *devicePath == "" {
-		return fmt.Errorf("Unable to check unspecified devicePath")
+		return fmt.Errorf("unable to check unspecified devicePath")
 	}
 
 	for i := uint(0); i <= maxRetries; i++ {
