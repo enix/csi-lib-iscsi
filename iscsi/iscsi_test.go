@@ -727,7 +727,7 @@ func TestConnectorPersistance(t *testing.T) {
 	assert.IsType(&json.SyntaxError{}, err)
 }
 
-func Test_isMultipathConsistent(t *testing.T) {
+func Test_IsMultipathConsistent(t *testing.T) {
 	mpath1 := Device{Name: "3600c0ff0000000000000000000000000", Type: "mpath", Size: "10G", Hctl: "0:0:0:1"}
 	mpath2 := Device{Name: "3600c0ff0000000000000000000000042", Type: "mpath", Size: "5G", Hctl: "0:0:0:2"}
 	sda := Device{Name: "sda", Size: "10G", Hctl: "1:0:0:1"}
@@ -826,7 +826,7 @@ func Test_isMultipathConsistent(t *testing.T) {
 				return []byte(wwid + "\n"), nil
 			}).Reset()
 
-			err := c.isMultipathConsistent()
+			err := c.IsMultipathConsistent()
 
 			if tt.wantErr {
 				assert.Error(err)

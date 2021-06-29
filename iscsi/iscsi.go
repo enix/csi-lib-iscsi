@@ -297,7 +297,7 @@ func (c *Connector) Connect() (string, error) {
 	}
 
 	if c.IsMultipathEnabled() {
-		if err := c.isMultipathConsistent(); err != nil {
+		if err := c.IsMultipathConsistent(); err != nil {
 			return "", fmt.Errorf("multipath is inconsistent: %v", err)
 		}
 	}
@@ -405,7 +405,7 @@ func (c *Connector) DisconnectVolume() error {
 	// Note: make sure the volume is already unmounted before calling this method.
 
 	if c.IsMultipathEnabled() {
-		if err := c.isMultipathConsistent(); err != nil {
+		if err := c.IsMultipathConsistent(); err != nil {
 			return fmt.Errorf("multipath is inconsistent: %v", err)
 		}
 
@@ -616,7 +616,7 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 	return &c, nil
 }
 
-func (c *Connector) isMultipathConsistent() error {
+func (c *Connector) IsMultipathConsistent() error {
 	devices := append([]Device{*c.MountTargetDevice}, c.Devices...)
 
 	referenceLUN := struct {
